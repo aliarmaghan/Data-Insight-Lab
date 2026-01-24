@@ -1,0 +1,631 @@
+---
+title: "Snakebite Clinical Analysis"
+author: "Md Ali Armaghan"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+# Global chunk options
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+------------------------------------------------------------------------
+
+# Section A: Data Import and Structure
+
+## Objective
+
+Import the dataset, inspect structure, and prepare variables for analysis.
+
+```{r}
+# Load required libraries
+library(tidyverse)
+library(psych)
+library(ggplot2)
+library(knitr)
+```
+
+```{r}
+# Import dataset
+snake_df <- read_csv("Snake_bite_dataset.csv", show_col_types = FALSE)
+```
+
+```{r}
+# Number of observations and variables 
+n_obs <- nrow(snake_df)
+n_vars <- ncol(snake_df)
+
+cat("Number of observations:", n_obs, "\n")
+cat("Number of variables:", n_vars, "\n")
+```
+
+```{r}
+# Structure and variable classes
+str(snake_df)
+```
+
+```{r}
+# Convert appropriate variables to factors
+snake_df <- snake_df %>%
+  mutate(
+    gender = factor(gender),
+    severity = factor(severity, levels = c("Mild", "Moderate", "Severe"), ordered = TRUE),
+    
+    # Comorbidities
+    diabetes = factor(diabetes, levels = c(0, 1), labels = c("No", "Yes")),
+    hypertension = factor(hypertension, levels = c(0, 1), labels = c("No", "Yes")),
+    ckd = factor(ckd, levels = c(0, 1), labels = c("No", "Yes")),
+    
+    # Vital-derived variable
+    hypotension = factor(hypotension, levels = c(0, 1), labels = c("No", "Yes")),
+    
+    # Create derived laboratory abnormality variables
+    # Note: Clinical cutoffs used are standard reference values
+    leukocytosis = factor(ifelse(tlc > 11000, 1, 0), 
+                          levels = c(0, 1), labels = c("No", "Yes")),
+    elevated_crp = factor(ifelse(crp > 10, 1, 0), 
+                          levels = c(0, 1), labels = c("No", "Yes")),
+    elevated_ldh = factor(ifelse(ldh > 250, 1, 0), 
+                          levels = c(0, 1), labels = c("No", "Yes")),
+    hypoalbuminemia = factor(ifelse(albumin < 3.5, 1, 0), 
+                             levels = c(0, 1), labels = c("No", "Yes")),
+    
+    # Outcomes
+    icu_admission = factor(icu_admission, levels = c(0, 1), labels = c("No", "Yes")),
+    any_complication = factor(any_complication, levels = c(0, 1), labels = c("No", "Yes")),
+    mortality = factor(mortality, levels = c(0, 1), labels = c("No", "Yes"))
+  )
+```
+
+**Note:**\
+Derived laboratory abnormality variables were created using standard clinical reference ranges: leukocytosis (TLC \> 11,000 cells/mm³), elevated CRP (\> 10 mg/L), elevated LDH (\> 250 U/L), and hypoalbuminemia (albumin \< 3.5 g/dL). Gender and severity were converted to factors, with severity specified as ordered to reflect disease progression.
+
+------------------------------------------------------------------------
+
+# Section B: Descriptive Statistics
+
+## Continuous Variables
+
+```{r}
+# Custom summary statistics function
+summary_stats <- function(x) {
+  c(
+    Mean   = mean(x, na.rm = TRUE),
+    SD     = sd(x, na.rm = TRUE),
+    Median = median(x, na.rm = TRUE),
+    Q1     = quantile(x, 0.25, na.rm = TRUE),
+    Q3     = quantile(x, 0.75, na.rm = TRUE),
+    IQR    = IQR(x, na.rm = TRUE),
+    Min    = min(x, na.rm = TRUE),
+    Max    = max(x, na.rm = TRUE)
+  )
+}
+
+# Select continuous variables as per assignment requirements
+continuous_vars <- snake_df %>%
+  select(
+    # Age
+    age,
+    # Vital parameters
+    pulse, rr, sbp, dbp, spo2,
+    # Laboratory parameters
+    tlc, crp, ldh, albumin,
+    # Duration variables
+    hospital_stay, icu_stay_days
+  )
+
+# Compute summary statistics
+stats_table <- sapply(continuous_vars, summary_stats)
+
+# Display as readable table
+kable(t(stats_table), digits = 2, 
+      caption = "Summary Statistics for Continuous Variables")
+```
+
+## Categorical Variables
+
+```{r}
+# Helper function for frequency and percentage
+freq_percent <- function(x, var_name) {
+  tbl <- table(x, useNA = "no")
+  result <- tibble(
+    Category = names(tbl),
+    Frequency = as.integer(tbl),
+    Percentage = round(as.numeric(tbl) / sum(tbl) * 100, 1)
+  )
+  cat("\n", var_name, "\n")
+  print(kable(result))
+}
+
+# Create age groups
+snake_df <- snake_df %>%
+  mutate(age_group = cut(
+    age,
+    breaks = c(18, 30, 45, 60, Inf),
+    labels = c("18-30", "31-45", "46-60", ">60"),
+    right = TRUE
+  ))
+
+# Age Group
+freq_percent(snake_df$age_group, "Age Group")
+
+# Sex
+freq_percent(snake_df$gender, "Gender")
+
+# Hypotension at presentation
+freq_percent(snake_df$hypotension, "Hypotension at Presentation")
+
+# Comorbidities
+freq_percent(snake_df$diabetes, "Diabetes")
+freq_percent(snake_df$hypertension, "Hypertension")
+freq_percent(snake_df$ckd, "Chronic Kidney Disease")
+
+# Derived laboratory abnormalities
+freq_percent(snake_df$leukocytosis, "Leukocytosis")
+freq_percent(snake_df$elevated_crp, "Elevated CRP")
+freq_percent(snake_df$elevated_ldh, "Elevated LDH")
+freq_percent(snake_df$hypoalbuminemia, "Hypoalbuminemia")
+
+# ICU Admission
+freq_percent(snake_df$icu_admission, "ICU Admission")
+
+# Overall Complications
+freq_percent(snake_df$any_complication, "Any Complication")
+```
+
+------------------------------------------------------------------------
+
+# Section C: Data Visualization
+
+## Objective
+
+Create publication-quality plots with clear titles, axis labels, and appropriate themes.
+
+```{r fig.width=7, fig.height=5}
+# Boxplot for age distribution
+ggplot(snake_df, aes(y = age)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.7) +
+  labs(
+    title = "Distribution of Age Among Snakebite Patients",
+    y = "Age (years)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+```{r fig.width=7, fig.height=5}
+# Bar chart for sex distribution
+ggplot(snake_df, aes(x = gender, fill = gender)) +
+  geom_bar(alpha = 0.8) +
+  geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -0.5) +
+  labs(
+    title = "Gender Distribution of Snakebite Patients",
+    x = "Gender",
+    y = "Frequency"
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "none"
+  )
+```
+
+```{r fig.width=8, fig.height=5}
+# Boxplots for laboratory parameters (CRP and LDH)
+p1 <- ggplot(snake_df, aes(y = crp)) +
+  geom_boxplot(fill = "coral", alpha = 0.7) +
+  labs(
+    title = "Distribution of Serum CRP",
+    y = "CRP (mg/L)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+p2 <- ggplot(snake_df, aes(y = ldh)) +
+  geom_boxplot(fill = "darkseagreen", alpha = 0.7) +
+  labs(
+    title = "Distribution of Serum LDH",
+    y = "LDH (U/L)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+
+# Display plots side by side
+library(gridExtra)
+grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r fig.width=7, fig.height=5}
+# Boxplot for hospital stay
+ggplot(snake_df, aes(y = hospital_stay)) +
+  geom_boxplot(fill = "plum", alpha = 0.7) +
+  labs(
+    title = "Distribution of Hospital Stay Duration",
+    y = "Hospital Stay (days)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+```
+
+------------------------------------------------------------------------
+
+# Section D: Association with Complications
+
+## Objective
+
+Compare laboratory parameters between patients who developed complications vs. those who did not.
+
+```{r}
+# Continuous laboratory parameters comparison
+# Test: Wilcoxon rank-sum test (Mann-Whitney U) - non-parametric alternative to t-test
+# Used due to potential non-normality in clinical lab data
+
+cat("=== CONTINUOUS LABORATORY PARAMETERS vs COMPLICATIONS ===\n\n")
+
+# Total Leukocyte Count
+test_tlc <- wilcox.test(tlc ~ any_complication, data = snake_df)
+cat("Total Leukocyte Count:\n")
+cat("  Test: Wilcoxon rank-sum test\n")
+cat("  p-value:", format.pval(test_tlc$p.value, digits = 3), "\n")
+cat("  Median (No complication):", 
+    median(snake_df$tlc[snake_df$any_complication == "No"], na.rm = TRUE), "\n")
+cat("  Median (Complication):", 
+    median(snake_df$tlc[snake_df$any_complication == "Yes"], na.rm = TRUE), "\n")
+if(test_tlc$p.value < 0.05) {
+  cat("  Interpretation: Significant difference detected (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant difference (p >= 0.05)\n\n")
+}
+
+# Serum CRP
+test_crp <- wilcox.test(crp ~ any_complication, data = snake_df)
+cat("Serum CRP:\n")
+cat("  Test: Wilcoxon rank-sum test\n")
+cat("  p-value:", format.pval(test_crp$p.value, digits = 3), "\n")
+cat("  Median (No complication):", 
+    median(snake_df$crp[snake_df$any_complication == "No"], na.rm = TRUE), "\n")
+cat("  Median (Complication):", 
+    median(snake_df$crp[snake_df$any_complication == "Yes"], na.rm = TRUE), "\n")
+if(test_crp$p.value < 0.05) {
+  cat("  Interpretation: Significant difference detected (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant difference (p >= 0.05)\n\n")
+}
+
+# Serum LDH
+test_ldh <- wilcox.test(ldh ~ any_complication, data = snake_df)
+cat("Serum LDH:\n")
+cat("  Test: Wilcoxon rank-sum test\n")
+cat("  p-value:", format.pval(test_ldh$p.value, digits = 3), "\n")
+cat("  Median (No complication):", 
+    median(snake_df$ldh[snake_df$any_complication == "No"], na.rm = TRUE), "\n")
+cat("  Median (Complication):", 
+    median(snake_df$ldh[snake_df$any_complication == "Yes"], na.rm = TRUE), "\n")
+if(test_ldh$p.value < 0.05) {
+  cat("  Interpretation: Significant difference detected (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant difference (p >= 0.05)\n\n")
+}
+
+# Serum Albumin
+test_albumin <- wilcox.test(albumin ~ any_complication, data = snake_df)
+cat("Serum Albumin:\n")
+cat("  Test: Wilcoxon rank-sum test\n")
+cat("  p-value:", format.pval(test_albumin$p.value, digits = 3), "\n")
+cat("  Median (No complication):", 
+    median(snake_df$albumin[snake_df$any_complication == "No"], na.rm = TRUE), "\n")
+cat("  Median (Complication):", 
+    median(snake_df$albumin[snake_df$any_complication == "Yes"], na.rm = TRUE), "\n")
+if(test_albumin$p.value < 0.05) {
+  cat("  Interpretation: Significant difference detected (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant difference (p >= 0.05)\n\n")
+}
+```
+
+```{r}
+# Categorical laboratory abnormalities comparison
+# Test: Chi-square test or Fisher's exact test (if expected frequencies < 5)
+
+cat("=== CATEGORICAL LABORATORY ABNORMALITIES vs COMPLICATIONS ===\n\n")
+
+# Function to perform appropriate test
+categorical_test <- function(var, var_name, outcome) {
+  contingency_table <- table(var, outcome)
+  
+  # Check expected frequencies
+  chi_test <- chisq.test(contingency_table)
+  
+  cat(var_name, ":\n")
+  print(contingency_table)
+  
+  # Use Fisher's exact if any expected frequency < 5
+  if(any(chi_test$expected < 5)) {
+    fisher_test <- fisher.test(contingency_table)
+    cat("  Test: Fisher's exact test (due to small expected frequencies)\n")
+    cat("  p-value:", format.pval(fisher_test$p.value, digits = 3), "\n")
+    p_val <- fisher_test$p.value
+  } else {
+    cat("  Test: Chi-square test\n")
+    cat("  p-value:", format.pval(chi_test$p.value, digits = 3), "\n")
+    p_val <- chi_test$p.value
+  }
+  
+  if(p_val < 0.05) {
+    cat("  Interpretation: Significant association detected (p < 0.05)\n\n")
+  } else {
+    cat("  Interpretation: No significant association (p >= 0.05)\n\n")
+  }
+}
+
+# Leukocytosis
+categorical_test(snake_df$leukocytosis, "Leukocytosis", snake_df$any_complication)
+
+# Elevated CRP
+categorical_test(snake_df$elevated_crp, "Elevated CRP", snake_df$any_complication)
+
+# Elevated LDH
+categorical_test(snake_df$elevated_ldh, "Elevated LDH", snake_df$any_complication)
+
+# Hypoalbuminemia
+categorical_test(snake_df$hypoalbuminemia, "Hypoalbuminemia", snake_df$any_complication)
+```
+
+------------------------------------------------------------------------
+
+# Section E: Association with ICU Admission
+
+## Objective
+
+Compare laboratory parameters between ICU-admitted and non-ICU patients.
+
+```{r}
+# Continuous laboratory parameters comparison
+cat("=== CONTINUOUS LABORATORY PARAMETERS vs ICU ADMISSION ===\n\n")
+
+# Total Leukocyte Count
+test_tlc_icu <- wilcox.test(tlc ~ icu_admission, data = snake_df)
+cat("Total Leukocyte Count:\n")
+cat("  Test: Wilcoxon rank-sum test\n")
+cat("  p-value:", format.pval(test_tlc_icu$p.value, digits = 3), "\n")
+cat("  Median (No ICU):", 
+    median(snake_df$tlc[snake_df$icu_admission == "No"], na.rm = TRUE), "\n")
+cat("  Median (ICU admitted):", 
+    median(snake_df$tlc[snake_df$icu_admission == "Yes"], na.rm = TRUE), "\n")
+if(test_tlc_icu$p.value < 0.05) {
+  cat("  Interpretation: Significant difference detected (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant difference (p >= 0.05)\n\n")
+}
+
+# Serum CRP
+test_crp_icu <- wilcox.test(crp ~ icu_admission, data = snake_df)
+cat("Serum CRP:\n")
+cat("  Test: Wilcoxon rank-sum test\n")
+cat("  p-value:", format.pval(test_crp_icu$p.value, digits = 3), "\n")
+cat("  Median (No ICU):", 
+    median(snake_df$crp[snake_df$icu_admission == "No"], na.rm = TRUE), "\n")
+cat("  Median (ICU admitted):", 
+    median(snake_df$crp[snake_df$icu_admission == "Yes"], na.rm = TRUE), "\n")
+if(test_crp_icu$p.value < 0.05) {
+  cat("  Interpretation: Significant difference detected (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant difference (p >= 0.05)\n\n")
+}
+
+# Serum LDH
+test_ldh_icu <- wilcox.test(ldh ~ icu_admission, data = snake_df)
+cat("Serum LDH:\n")
+cat("  Test: Wilcoxon rank-sum test\n")
+cat("  p-value:", format.pval(test_ldh_icu$p.value, digits = 3), "\n")
+cat("  Median (No ICU):", 
+    median(snake_df$ldh[snake_df$icu_admission == "No"], na.rm = TRUE), "\n")
+cat("  Median (ICU admitted):", 
+    median(snake_df$ldh[snake_df$icu_admission == "Yes"], na.rm = TRUE), "\n")
+if(test_ldh_icu$p.value < 0.05) {
+  cat("  Interpretation: Significant difference detected (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant difference (p >= 0.05)\n\n")
+}
+
+# Serum Albumin
+test_albumin_icu <- wilcox.test(albumin ~ icu_admission, data = snake_df)
+cat("Serum Albumin:\n")
+cat("  Test: Wilcoxon rank-sum test\n")
+cat("  p-value:", format.pval(test_albumin_icu$p.value, digits = 3), "\n")
+cat("  Median (No ICU):", 
+    median(snake_df$albumin[snake_df$icu_admission == "No"], na.rm = TRUE), "\n")
+cat("  Median (ICU admitted):", 
+    median(snake_df$albumin[snake_df$icu_admission == "Yes"], na.rm = TRUE), "\n")
+if(test_albumin_icu$p.value < 0.05) {
+  cat("  Interpretation: Significant difference detected (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant difference (p >= 0.05)\n\n")
+}
+```
+
+```{r}
+# Categorical laboratory abnormalities comparison
+cat("=== CATEGORICAL LABORATORY ABNORMALITIES vs ICU ADMISSION ===\n\n")
+
+# Leukocytosis
+categorical_test(snake_df$leukocytosis, "Leukocytosis", snake_df$icu_admission)
+
+# Elevated CRP
+categorical_test(snake_df$elevated_crp, "Elevated CRP", snake_df$icu_admission)
+
+# Elevated LDH
+categorical_test(snake_df$elevated_ldh, "Elevated LDH", snake_df$icu_admission)
+
+# Hypoalbuminemia
+categorical_test(snake_df$hypoalbuminemia, "Hypoalbuminemia", snake_df$icu_admission)
+```
+
+------------------------------------------------------------------------
+
+# Section F: Correlation Analysis
+
+## Objective
+
+Perform Spearman's rank correlation between laboratory parameters and hospital stay duration.
+
+```{r}
+# Spearman's rank correlation
+# Justification: Used for non-parametric correlation when data may not be normally 
+# distributed or when relationships may be monotonic but not necessarily linear
+
+cat("=== SPEARMAN'S RANK CORRELATION WITH HOSPITAL STAY ===\n\n")
+
+# Total Leukocyte Count
+cor_tlc <- cor.test(snake_df$tlc, snake_df$hospital_stay, 
+                    method = "spearman", exact = FALSE)
+cat("Total Leukocyte Count vs Hospital Stay:\n")
+cat("  Spearman's rho:", round(cor_tlc$estimate, 3), "\n")
+cat("  p-value:", format.pval(cor_tlc$p.value, digits = 3), "\n")
+if(cor_tlc$p.value < 0.05) {
+  direction <- ifelse(cor_tlc$estimate > 0, "positive", "negative")
+  cat("  Interpretation: Significant", direction, "correlation (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant correlation (p >= 0.05)\n\n")
+}
+
+# Serum CRP
+cor_crp <- cor.test(snake_df$crp, snake_df$hospital_stay, 
+                    method = "spearman", exact = FALSE)
+cat("Serum CRP vs Hospital Stay:\n")
+cat("  Spearman's rho:", round(cor_crp$estimate, 3), "\n")
+cat("  p-value:", format.pval(cor_crp$p.value, digits = 3), "\n")
+if(cor_crp$p.value < 0.05) {
+  direction <- ifelse(cor_crp$estimate > 0, "positive", "negative")
+  cat("  Interpretation: Significant", direction, "correlation (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant correlation (p >= 0.05)\n\n")
+}
+
+# Serum LDH
+cor_ldh <- cor.test(snake_df$ldh, snake_df$hospital_stay, 
+                    method = "spearman", exact = FALSE)
+cat("Serum LDH vs Hospital Stay:\n")
+cat("  Spearman's rho:", round(cor_ldh$estimate, 3), "\n")
+cat("  p-value:", format.pval(cor_ldh$p.value, digits = 3), "\n")
+if(cor_ldh$p.value < 0.05) {
+  direction <- ifelse(cor_ldh$estimate > 0, "positive", "negative")
+  cat("  Interpretation: Significant", direction, "correlation (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant correlation (p >= 0.05)\n\n")
+}
+
+# Serum Albumin
+cor_albumin <- cor.test(snake_df$albumin, snake_df$hospital_stay, 
+                        method = "spearman", exact = FALSE)
+cat("Serum Albumin vs Hospital Stay:\n")
+cat("  Spearman's rho:", round(cor_albumin$estimate, 3), "\n")
+cat("  p-value:", format.pval(cor_albumin$p.value, digits = 3), "\n")
+if(cor_albumin$p.value < 0.05) {
+  direction <- ifelse(cor_albumin$estimate > 0, "positive", "negative")
+  cat("  Interpretation: Significant", direction, "correlation (p < 0.05)\n\n")
+} else {
+  cat("  Interpretation: No significant correlation (p >= 0.05)\n\n")
+}
+```
+
+**Justification for Spearman's Correlation:**\
+Spearman's rank correlation is appropriate for this analysis because:
+
+1.  Clinical laboratory data often exhibit non-normal distributions with outliers
+
+2.  The relationship between biomarkers and hospital stay may be monotonic but not strictly linear
+
+3.  Spearman's method is robust to extreme values common in clinical datasets
+
+4.  It does not assume normality or homoscedasticity
+
+```{r fig.width=8, fig.height=6}
+# Scatter plot visualization (example: CRP vs Hospital Stay)
+ggplot(snake_df, aes(x = crp, y = hospital_stay)) +
+  geom_point(alpha = 0.6, color = "steelblue", size = 2.5) +
+  geom_smooth(method = "lm", se = TRUE, color = "red", linetype = "dashed") +
+  labs(
+    title = "Correlation between Serum CRP and Hospital Stay Duration",
+    subtitle = paste("Spearman's rho =", round(cor_crp$estimate, 3), 
+                     ", p-value =", format.pval(cor_crp$p.value, digits = 3)),
+    x = "Serum CRP (mg/L)",
+    y = "Hospital Stay (days)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+------------------------------------------------------------------------
+
+# Section G: Interpretation and Professional Judgement
+
+## Why is correlation analysis appropriate in this context?
+
+Correlation analysis is appropriate for this observational clinical dataset because it allows us to:
+
+1.  **Quantify relationships**: Measure the strength and direction of association between laboratory biomarkers and clinical outcomes like hospital stay duration without making assumptions about causality.
+
+2.  **Identify potential prognostic markers**: Determine which laboratory parameters show meaningful associations with patient outcomes, informing hypothesis generation for future research.
+
+3.  **Guide clinical decision-making**: Correlations can suggest which biomarkers might be useful for risk stratification or monitoring disease severity, though they require validation through prospective studies.
+
+4.  **Data exploration**: In an observational study, correlation analysis serves as an exploratory tool to understand patterns in the data before conducting more complex analyses.
+
+## Why should regression modelling be used?
+
+Regression modelling should be used because it provides several advantages over simple correlation:
+
+1.  **Multivariable adjustment**: Regression allows simultaneous evaluation of multiple predictors while controlling for potential confounders such as age, comorbidities, and severity of envenomation.
+
+2.  **Effect quantification**: Unlike correlation which only measures association strength, regression provides interpretable coefficients that estimate the magnitude of change in the outcome for a unit change in the predictor.
+
+3.  **Model building**: Enables identification of independent predictors of outcomes by assessing each variable's contribution while holding others constant.
+
+4.  **Prediction**: Regression models can be used to develop risk prediction tools for clinical use, such as predicting ICU admission likelihood or complication risk based on admission parameters.
+
+5.  **Handling non-linearity and interactions**: Advanced regression techniques can model complex relationships and interaction effects between variables that simple correlation cannot capture.
+
+## Why should causality not be inferred?
+
+Causality should not be inferred from this observational study for several critical reasons:
+
+1.  **Study design limitations**: This is an observational cross-sectional or retrospective cohort study, not a randomized controlled trial. Without randomization, we cannot eliminate confounding by unmeasured variables.
+
+2.  **Temporal ambiguity**: While some measurements are taken at admission, the temporal sequence between certain exposures and outcomes may be unclear, making it difficult to establish that the exposure preceded the outcome.
+
+3.  **Confounding**: Multiple unmeasured or uncontrolled factors (e.g., snake species, venom load, time to treatment, pre-hospital care, genetic factors) could influence both laboratory parameters and clinical outcomes, creating spurious associations.
+
+4.  **Reverse causation**: In some cases, the outcome itself might influence the biomarker levels rather than vice versa (e.g., complications leading to inflammatory marker elevation).
+
+5.  **Bradford Hill criteria**: Establishing causation requires fulfilling multiple criteria including temporal relationship, dose-response, biological plausibility, consistency across studies, and experimental evidence—none of which can be fully assessed from a single observational dataset.
+
+6.  **Association ≠ causation**: Statistical significance and correlation indicate association only. Even strong associations may reflect shared underlying mechanisms rather than direct causal pathways.
+
+**Professional responsibility**: As data analysts and researchers, we must clearly communicate that our findings suggest associations that warrant further investigation through prospective, interventional, or mechanistic studies, rather than establishing causal relationships.
+
+------------------------------------------------------------------------
