@@ -1,3 +1,4 @@
+
 -- drop table if exists customers
 
 CREATE TABLE customers (
